@@ -417,7 +417,7 @@ impl<'data> SafeTensors<'data> {
             serde_json::from_str(string).map_err(SafeTensorError::InvalidHeaderDeserialization)?;
         let metadata: Metadata = metadata.try_into()?;
         let buffer_end = metadata.validate()?;
-        if buffer_end + N_LEN + n != buffer_len {
+        if stop.checked_add(buffer_end) != Some(buffer_len) {
             return Err(SafeTensorError::MetadataIncompleteBuffer);
         }
 
@@ -1616,5 +1616,31 @@ mod tests {
             }
             _ => panic!("This should not be able to be serialized"),
         }
+    }
+
+    #[test]
+    fn test_read_metadata_buffer_end_overflow() {
+        let chunk = usize::MAX / 8;
+        let entries: Vec<String> = (0..8)
+            .map(|i| {
+                let start = i * chunk;
+                let end = (i + 1) * chunk;
+                format!(
+                    r#""t{i}":{{"dtype":"U8","shape":[{chunk}],"data_offsets":[{start},{end}]}}"#
+                )
+            })
+            .collect();
+        let header = format!("{{{}}}", entries.join(","));
+        let mut serialized = (header.len() as u64).to_le_bytes().to_vec();
+        serialized.extend_from_slice(header.as_bytes());
+
+        assert!(matches!(
+            SafeTensors::read_metadata(&serialized),
+            Err(SafeTensorError::MetadataIncompleteBuffer)
+        ));
+        assert!(matches!(
+            SafeTensors::deserialize(&serialized),
+            Err(SafeTensorError::MetadataIncompleteBuffer)
+        ));
     }
 }
